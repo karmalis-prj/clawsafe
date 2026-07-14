@@ -25,6 +25,8 @@ a{color:inherit}
 .stat b{display:block;font-size:24px;font-variant-numeric:tabular-nums}
 .stat span{color:var(--dim);font-size:12px;text-transform:uppercase;letter-spacing:.04em}
 .stat.hi b{color:var(--accent)}
+.note{color:var(--dim);font-size:12.5px;margin:-8px 0 22px}
+.note b{color:var(--ink)}
 .callout{background:var(--card);border:1px solid var(--line);border-left:3px solid var(--accent);
   border-radius:8px;padding:12px 16px;margin:0 0 24px;color:var(--dim);font-size:13.5px}
 .callout b{color:var(--ink)}
@@ -65,14 +67,16 @@ footer{margin-top:28px;color:var(--dim);font-size:12px}
 <div class="stat"><b>46</b><span>감사한 스킬</span></div>
 <div class="stat hi"><b>25</b><span>스캐너 불일치</span></div>
 <div class="stat hi"><b>54%</b><span>불일치율</span></div>
-<div class="stat"><b>0</b><span>UNSAFE</span></div>
+<div class="stat" title="3종 만장일치 malicious는 원 논문에서도 전체의 0.69%뿐 — UNSAFE가 0에 가까운 건 결함이 아니라 스캐너들이 악성엔 좀처럼 함께 확신하지 못한다는 이 논지의 증거다."><b>0</b><span>UNSAFE (만장일치 악성)</span></div>
 <div class="stat"><b>21</b><span>만장일치 SAFE</span></div>
 </div>
+<p class="note">UNSAFE 0건 — 세 스캐너가 <b>함께</b> 악성으로 확신하는 일은 드물다(원 논문 표본에서도 0.69%). 위험은 대개 <b>불일치</b> 속에 숨는다.</p>
 
 <div class="callout">
-스캐너 3종은 서로 자주 갈린다 — 이 표본의 <b>54%</b>가 불일치다.
-어느 하나만 믿으면 놓친다(<a href="https://arxiv.org/abs/2606.01494" rel="noopener">arxiv 2606.01494</a>: 세 스캐너 positive의 10.4%도 안 겹침).
-ClawSafe는 그 불일치를 라벨로 덮지 않고 <b>증거로 보존</b>한다. 아래 표에서 갈린 판정(DISPUTED)을 맨 위에 둔다.
+스캐너 3종은 서로 자주 갈린다 — 이 표본의 <b>54%</b>가 불일치다. 어느 하나만 믿으면 놓친다.
+<a href="https://arxiv.org/abs/2606.01494" rel="noopener">Koc 외(arxiv 2606.01494)</a>, <i>“ClawHub Security Signals: When VirusTotal, Static Analysis, and SkillSpector Disagree”</i>는
+67,453개 스킬 버전에서 <b>세 스캐너 positive의 겹침이 최대 10.4%</b>, 단일 스캐너만 flag가 <b>81.9%</b>임을 보였다.
+이 리더보드는 그 현상을 매일 갱신하는 <b>살아있는 축소 실증</b>이다 — ClawSafe는 불일치를 라벨로 덮지 않고 <b>증거로 보존</b>하고, 갈린 판정(DISPUTED)을 맨 위에 둔다.
 </div>
 
 <div class="tablewrap"><table>
@@ -136,6 +140,7 @@ text to make it sound more natural and hum</div></td><td class="vote v-clean" ti
 <footer>
 데이터 원본: <a href="https://clawhub.ai" rel="noopener">ClawHub</a> 공개 스캔 API ·
 합의 규칙: malicious 1건이라도 → UNSAFE, 만장일치 clean → SAFE, 그 외 → DISPUTED(스캔 부재·스캐너 error 포함) ·
-전 판정은 <code>data/verdicts.jsonl</code>로 재현 가능.
+전 판정 원본: <a href="https://github.com/karmalis-prj/clawsafe/blob/master/data/verdicts.jsonl" rel="noopener"><code>data/verdicts.jsonl</code></a> ·
+<a href="https://github.com/karmalis-prj/clawsafe" rel="noopener">소스·파이프라인</a>(표준 라이브러리만, 외부 요청 0)로 재현 가능.
 </footer>
 </div></body></html>
