@@ -1,0 +1,62 @@
+name: daily-audit
+
+# 매일 ClawHub 스킬을 재수집 → 재채점 → 리더보드 재빌드 → 변경분 커밋.
+# Pages는 master /docs 폴더에서 자동 배포되므로 push만 하면 리더보드가 갱신된다.
+# 외부 의존성 0 (파이프라인은 파이썬 표준 라이브러리만 사용) → pip install 불필요.
+
+on:
+  schedule:
+    # 매일 00:20 UTC (= KST 09:20). 정각 피크를 피해 20분 오프셋.
+    - cron: "20 0 * * *"
+  workflow_dispatch:
+    inputs:
+      limit:
+        description: "수집 상한 (nextCursor가 마르면 자동으로 조기 종료). 전량=넉넉한 상한."
+        required: false
+        default: "2000"
+
+permissions:
+  contents: write
+
+concurrency:
+  group: daily-audit
+  cancel-in-progress: false
+
+jobs:
+  audit:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Collect → score → build
+        env:
+          # 수동 실행 시 입력값, 크론 실행 시 전량 상한(2000).
+          CLAWSAFE_LIMIT: ${{ github.event.inputs.limit || '2000' }}
+        run: |
+          set -euo pipefail
+          echo "::group::collect (limit=$CLAWSAFE_LIMIT)"
+          python -m fetch.collect "$CLAWSAFE_LIMIT"
+          echo "::endgroup::"
+          echo "::group::score"
+          python judge/score.py
+          echo "::endgroup::"
+          echo "::group::build"
+          python site/build.py
+          echo "::endgroup::"
+
+      - name: Commit if changed
+        run: |
+          set -euo pipefail
+          git config user.name  "clawsafe-bot"
+          git config user.email "clawsafe-bot@users.noreply.github.com"
+          git add data/raw.jsonl data/verdicts.jsonl docs/index.html
+          if git diff --cached --quiet; then
+            echo "변경 없음 — 커밋 스킵."
+            exit 0
+          fi
+          git commit -m "chore(daily): 리더보드 자동 갱신 ($(date -u +%Y-%m-%d))"
+          git push

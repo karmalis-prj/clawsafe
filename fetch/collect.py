@@ -7,12 +7,14 @@
                     stats,createdAt,updatedAt,latestVersion,metadata
       · latestVersion = {version,createdAt,changelog,license}  (파일목록 없음)
   GET /api/v1/skills/{slug}                 → {skill,latestVersion,metadata,owner,moderation}
-      · 같은 slug이 여러 owner에 있으면 409 AMBIGUOUS_SKILL_SLUG → 스킵.
-  GET /api/v1/skills/{slug}/file?path=SKILL.md  → raw 파일 (200KB 제한).
-  GET /api/v1/skills/{slug}/scan            → {skill,version,moderation,security}
+      · 같은 slug이 여러 owner에 있으면 409 AMBIGUOUS_SKILL_SLUG.
+        바디에 matches[]={ownerHandle,slug,ref,url}. owner-qualified 로 재조회.
+  GET /api/v1/skills/{slug}/file?path=SKILL.md[&owner=X]  → raw 파일 (200KB 제한).
+  GET /api/v1/skills/{slug}/scan[?owner=X]  → {skill,version,moderation,security}
       · security.scanners = {vt:{...}, ...}  ← 스캐너 불일치 투명로그의 대조 원본.
 
-식별자는 slug. ambiguous slug은 owner 미해결이라 v0에선 스킵(로그만 남김).
+식별자는 slug. ambiguous slug(409)은 matches[].ownerHandle 로 각 owner를 개별
+감사 대상으로 재수집한다 (`?owner=` 쿼리로 해결 — 실측 200).
 경로/한도는 .env 로 관리 (하드코딩 금지 원칙).
 """
 
@@ -86,21 +88,73 @@ def fetch_skills(limit: int | None = None, sort: str = "downloads") -> list[dict
             return out
 
 
-def fetch_source(slug: str) -> dict | None:
-    """slug의 소스 원문 + 기존 스캔결과를 묶어 반환. 채점기 입력 1건.
+def _ambiguous_owners(body: bytes) -> list[str]:
+    """409 AMBIGUOUS_SKILL_SLUG 바디에서 ownerHandle 목록 추출 (없으면 빈 리스트)."""
+    try:
+        matches = json.loads(body).get("matches") or []
+    except json.JSONDecodeError:
+        return []
+    return [m["ownerHandle"] for m in matches if m.get("ownerHandle")]
 
-    ambiguous slug(409)·소스없음은 None (호출측이 스킵 카운트).
-    반환: {slug, source, source_bytes, source_truncated, scan}
+
+def _fetch_one(slug: str, owner: str | None) -> dict:
+    """단일 (slug, owner) 조합의 소스+스캔 조회. owner 지정 시 owner-qualified.
+
+    반환: {slug, owner?, source, source_bytes, source_truncated, scan}
       scan = /scan 의 security 블록 (없으면 None) — 불일치 투명로그 원본.
     """
-    fstatus, fbody, _ = _get(f"/skills/{slug}/file", {"path": SOURCE_PATH})
-    if fstatus == 409:
-        return {"slug": slug, "skip": "ambiguous_slug"}  # owner 미해결, v1 과제
+    fparams = {"path": SOURCE_PATH}
+    sparams: dict = {}
+    if owner:
+        fparams["owner"] = owner
+        sparams["owner"] = owner
+
+    fstatus, fbody, _ = _get(f"/skills/{slug}/file", fparams)
     if fstatus != 200:
         return {"slug": slug, "skip": f"source_http_{fstatus}"}
     truncated = len(fbody) > FILE_MAX_BYTES
     source = fbody[:FILE_MAX_BYTES].decode("utf-8", errors="replace")
 
+    scan = None
+    sstatus, sbody, _ = _get(f"/skills/{slug}/scan", sparams)
+    if sstatus == 200:
+        try:
+            scan = json.loads(sbody).get("security")
+        except json.JSONDecodeError:
+            scan = None
+
+    rec = {
+        "slug": slug,
+        "source": source,
+        "source_bytes": len(fbody),
+        "source_truncated": truncated,
+        "scan": scan,
+    }
+    if owner:
+        rec["owner"] = owner
+    return rec
+
+
+def fetch_source(slug: str) -> list[dict]:
+    """slug의 감사 대상(들)을 조회. 채점기 입력 레코드 리스트.
+
+    같은 slug를 여러 owner가 가지면(409 AMBIGUOUS) 각 owner를 **개별 레코드**로
+    수집한다 — owner가 다르면 다른 스킬 = 다른 감사 대상이고, slug 충돌 자체가
+    감사 가치가 있는 정보다. owner-qualified 조회는 `?owner=` 파라미터로 푼다.
+
+    반환: 성공 레코드 리스트(0개=전부 스킵). 스킵 레코드는 {slug, skip}.
+    """
+    fstatus, fbody, _ = _get(f"/skills/{slug}/file", {"path": SOURCE_PATH})
+    if fstatus == 409:
+        owners = _ambiguous_owners(fbody)
+        if not owners:
+            return [{"slug": slug, "skip": "ambiguous_slug_no_owner"}]
+        return [_fetch_one(slug, o) for o in owners]
+    if fstatus != 200:
+        return [{"slug": slug, "skip": f"source_http_{fstatus}"}]
+    # 단일 skill (owner 불필요) — 이미 받은 바디 재사용.
+    truncated = len(fbody) > FILE_MAX_BYTES
+    source = fbody[:FILE_MAX_BYTES].decode("utf-8", errors="replace")
     scan = None
     sstatus, sbody, _ = _get(f"/skills/{slug}/scan")
     if sstatus == 200:
@@ -108,14 +162,15 @@ def fetch_source(slug: str) -> dict | None:
             scan = json.loads(sbody).get("security")
         except json.JSONDecodeError:
             scan = None
-
-    return {
-        "slug": slug,
-        "source": source,
-        "source_bytes": len(fbody),
-        "source_truncated": truncated,
-        "scan": scan,
-    }
+    return [
+        {
+            "slug": slug,
+            "source": source,
+            "source_bytes": len(fbody),
+            "source_truncated": truncated,
+            "scan": scan,
+        }
+    ]
 
 
 def write_raw(records: list[dict], path: str = "data/raw.jsonl") -> int:
@@ -138,12 +193,11 @@ def collect(
     records = []
     skips: dict[str, int] = {}
     for m in metas:
-        src = fetch_source(m["slug"])
-        if src is None or "skip" in src:
-            reason = (src or {}).get("skip", "no_source")
-            skips[reason] = skips.get(reason, 0) + 1
-            continue
-        records.append({**src, "meta": m})
+        for src in fetch_source(m["slug"]):
+            if "skip" in src:
+                skips[src["skip"]] = skips.get(src["skip"], 0) + 1
+                continue
+            records.append({**src, "meta": m})
     n = write_raw(records, out)
     return {
         "listed": len(metas),

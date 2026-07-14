@@ -35,6 +35,14 @@ def _esc(s) -> str:
     return html.escape(str(s if s is not None else ""))
 
 
+def _url_q(s) -> str:
+    """URL 쿼리값 인코딩 (owner 핸들 등). import는 함수 안 — 포매터가 미사용으로
+    오판해 모듈 import를 지우는 사고 방지."""
+    from urllib.parse import quote
+
+    return quote(str(s), safe="")
+
+
 def _vote_badges(votes: dict) -> str:
     cells = []
     for name in _SCANNER_ORDER:
@@ -50,18 +58,27 @@ def _vote_badges(votes: dict) -> str:
 
 
 def _row(r: dict) -> str:
-    slug = _esc(r.get("slug"))
+    slug_raw = r.get("slug") or ""
+    slug = _esc(slug_raw)
     name = _esc(r.get("displayName") or r.get("slug"))
     summary = _esc((r.get("summary") or "")[:120])
+    owner = r.get("owner")  # ambiguous slug 해소 시에만 존재
     label = r.get("label", "DISPUTED")
     lcls = {"SAFE": "l-safe", "UNSAFE": "l-bad", "DISPUTED": "l-disp"}.get(
         label, "l-disp"
     )
-    link = f"{HUB_BASE}/skills/{slug}"
+    # owner-qualified: 같은 slug 다른 owner = 다른 감사 대상. 링크·표시로 구분한다.
+    # (프론트 URL은 API와 동일하게 ?owner= 쿼리로 owner를 지정 — 미지정이면 slug 페이지)
+    if owner:
+        link = f"{HUB_BASE}/skills/{slug}?owner={_url_q(owner)}"
+        owner_tag = f'<span class="owner">@{_esc(owner)}</span>'
+    else:
+        link = f"{HUB_BASE}/skills/{slug}"
+        owner_tag = ""
     return (
         f'<tr class="{lcls}">'
         f'<td class="label"><span class="pill {lcls}">{_esc(label)}</span></td>'
-        f'<td class="skill"><a href="{_esc(link)}" rel="noopener">{name}</a>'
+        f'<td class="skill"><a href="{_esc(link)}" rel="noopener">{name}</a>{owner_tag}'
         f'<div class="sum">{summary}</div></td>'
         f"{_vote_badges(r.get('votes') or {})}"
         f'<td class="reason">{_esc(r.get("reason"))}</td>'
@@ -82,7 +99,13 @@ def build_leaderboard(verdicts_path: str = VERDICTS_PATH, out: str = OUT_PATH) -
     for r in rows:
         counts[r.get("label", "DISPUTED")] = counts.get(r.get("label"), 0) + 1
 
-    rows.sort(key=lambda r: (_LABEL_ORDER.get(r.get("label"), 9), r.get("slug") or ""))
+    rows.sort(
+        key=lambda r: (
+            _LABEL_ORDER.get(r.get("label"), 9),
+            r.get("slug") or "",
+            r.get("owner") or "",  # 같은 slug 다중 owner를 결정론적으로 인접 배치
+        )
+    )
     total = len(rows) or 1
     disp_pct = round(100 * counts["DISPUTED"] / total)
 
@@ -141,6 +164,7 @@ td{{padding:11px 12px;border-bottom:1px solid var(--line);vertical-align:top}}
 tr:last-child td{{border-bottom:0}}
 .skill a{{font-weight:600;text-decoration:none}}
 .skill a:hover{{text-decoration:underline}}
+.owner{{margin-left:6px;color:var(--dim);font-size:11px;font-family:ui-monospace,monospace}}
 .sum{{color:var(--dim);font-size:12px;margin-top:2px;max-width:34ch}}
 .reason{{color:var(--dim);font-size:12px;max-width:26ch}}
 .pill{{display:inline-block;padding:2px 9px;border-radius:20px;font-size:11px;

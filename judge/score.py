@@ -128,7 +128,7 @@ def score_all(
     """raw.jsonl 전 스킬 채점 → verdicts.jsonl. 집계 반환.
 
     verdicts.jsonl 각 행:
-      {slug, label, unanimous, votes, reason,
+      {slug, owner, label, unanimous, votes, reason,
        displayName, summary, source_bytes, source_truncated,
        top_status, checkedAt}
     """
@@ -150,6 +150,9 @@ def score_all(
         out.append(
             {
                 "slug": r.get("slug"),
+                "owner": r.get(
+                    "owner"
+                ),  # ambiguous slug 해소 시에만 존재 (단일 skill은 None)
                 "label": e["label"],
                 "unanimous": e["unanimous"],
                 "votes": e["votes"],
