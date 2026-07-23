@@ -22,6 +22,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import time
 import urllib.error
 import urllib.parse
@@ -173,11 +174,49 @@ def fetch_source(slug: str) -> list[dict]:
     ]
 
 
+# ── 시크릿 마스킹 ────────────────────────────────────────────
+# 감사 대상인 남의 스킬 소스에 자격증명 형식 문자열이 섞여 있으면, 그대로 커밋 시
+# GitHub 푸시 보호(secret scanning)가 push를 거부한다(2026-07 daily-audit 5일 연속 실패 원인).
+# 우리가 필요로 하는 것은 소스의 '취약 신호'이지 자격증명 값 자체가 아니므로, 저장 직전에
+# 알려진 자격증명 패턴만 플레이스홀더로 치환한다. score.py는 source 원문을 쓰지 않고
+# source_bytes/source_truncated만 쓰므로 채점에는 영향이 없다.
+_SECRET_PATTERNS: list[tuple[str, "re.Pattern[str]"]] = [
+    ("TWILIO_SID", re.compile(r"\bAC[0-9a-fA-F]{32}\b")),
+    ("TWILIO_KEY", re.compile(r"\bSK[0-9a-fA-F]{32}\b")),
+    ("AWS_ACCESS_KEY", re.compile(r"\b(?:AKIA|ASIA)[0-9A-Z]{16}\b")),
+    ("GITHUB_PAT", re.compile(r"\bgh[posru]_[0-9A-Za-z]{36,255}\b")),
+    ("SLACK_TOKEN", re.compile(r"\bxox[baprs]-[0-9A-Za-z-]{10,}\b")),
+    ("GOOGLE_API_KEY", re.compile(r"\bAIza[0-9A-Za-z_\-]{35}\b")),
+    ("OPENAI_KEY", re.compile(r"\bsk-[A-Za-z0-9]{20}T3BlbkFJ[A-Za-z0-9]{20}\b")),
+    ("PRIVATE_KEY", re.compile(r"-----BEGIN[ A-Z]*PRIVATE KEY-----")),
+]
+
+
+def mask_secrets(text: str) -> tuple[str, list[str]]:
+    """자격증명 형식 문자열을 [REDACTED_<종류>]로 치환. (치환된 텍스트, 감지종류목록) 반환."""
+    if not text:
+        return text, []
+    found: list[str] = []
+    for name, pat in _SECRET_PATTERNS:
+        if pat.search(text):
+            found.append(name)
+            text = pat.sub(f"[REDACTED_{name}]", text)
+    return text, found
+
+
 def write_raw(records: list[dict], path: str = "data/raw.jsonl") -> int:
-    """raw.jsonl 로 기록(덮어쓰기, 재현성 위해 스냅샷 1개=1파일). 반환=행수."""
+    """raw.jsonl 로 기록(덮어쓰기, 재현성 위해 스냅샷 1개=1파일). 반환=행수.
+
+    저장 직전 source 필드의 자격증명 패턴을 마스킹한다(푸시 보호 통과 + 남의 스킬
+    원문 재배포 방지). 감지 종류는 source_redacted 필드로 투명 기록.
+    """
     os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
     with open(path, "w", encoding="utf-8") as f:
         for r in records:
+            if isinstance(r.get("source"), str):
+                masked, found = mask_secrets(r["source"])
+                if found:
+                    r = {**r, "source": masked, "source_redacted": sorted(set(found))}
             f.write(json.dumps(r, ensure_ascii=False) + "\n")
     return len(records)
 
